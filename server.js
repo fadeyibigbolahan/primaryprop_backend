@@ -5,6 +5,7 @@ const cors = require("cors");
 
 const app = express();
 app.use(cors());
+
 const PORT = process.env.PORT || 5000;
 
 async function getAccessToken() {
@@ -15,75 +16,68 @@ async function getAccessToken() {
   params.append("scope", "api");
 
   const response = await axios.post(process.env.TOKEN_URL, params, {
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
   });
 
   return response.data.access_token;
 }
 
-async function fetchAllListings(token, top = 100) {
-  let allListings = [];
-  let nextUrl = `${process.env.LISTINGS_URL}?$top=${top}`;
+async function fetchListingsPage(token, skip = 0, top = 50) {
+  const url = `${process.env.LISTINGS_URL}?$top=${top}&$skip=${skip}`;
+  const response = await axios.get(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+      "Originating-System": process.env.ORIGINATING_SYSTEM,
+    },
+  });
 
-  while (nextUrl) {
-    const response = await axios.get(nextUrl, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json",
-        "Originating-System": process.env.ORIGINATING_SYSTEM,
-      },
-    });
-
-    const data = response.data;
-    allListings = allListings.concat(data.value);
-
-    nextUrl = data["@odata.nextLink"] || null;
-  }
-
-  return allListings;
+  return response.data.value;
 }
 
-app.get("/api/listings", async (req, res) => {
-  try {
-    const token = await getAccessToken();
+async function fetchMediaForKeys(token, numericKeys) {
+  const mediaMap = {};
+  const chunkSize = 50;
 
-    const listings = await fetchAllListings(token, 50); // 50 per page for efficiency
+  for (let i = 0; i < numericKeys.length; i += chunkSize) {
+    const chunk = numericKeys.slice(i, i + chunkSize);
+    const filter = `ResourceRecordKeyNumeric in (${chunk.join(",")})`;
 
-    const numericKeys = listings
-      .map((l) => l.ListingKeyNumeric)
-      .filter(Boolean);
+    const mediaRes = await axios.get(
+      `https://api-trestle.corelogic.com/trestle/odata/Media?$filter=${filter}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept:
+            "application/json;odata.metadata=minimal;IEEE754Compatible=true",
+          "Originating-System": process.env.ORIGINATING_SYSTEM,
+        },
+      }
+    );
 
-    const chunks = [];
-    const chunkSize = 50;
-
-    for (let i = 0; i < numericKeys.length; i += chunkSize) {
-      const chunk = numericKeys.slice(i, i + chunkSize);
-      const mediaFilter = `ResourceRecordKeyNumeric in (${chunk.join(",")})`;
-
-      const mediaResponse = await axios.get(
-        `https://api-trestle.corelogic.com/trestle/odata/Media?$filter=${mediaFilter}`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept:
-              "application/json;odata.metadata=minimal;IEEE754Compatible=true",
-            "Originating-System": process.env.ORIGINATING_SYSTEM,
-          },
-        }
-      );
-
-      chunks.push(...mediaResponse.data.value);
-    }
-
-    // Group media by ResourceRecordKeyNumeric
-    const mediaMap = {};
-    chunks.forEach((m) => {
+    mediaRes.data.value.forEach((m) => {
       const key = m.ResourceRecordKeyNumeric;
       if (!mediaMap[key]) mediaMap[key] = [];
       mediaMap[key].push(m.MediaURL);
     });
+  }
+
+  return mediaMap;
+}
+
+app.get("/api/listings", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page || "1");
+    const perPage = 50;
+    const skip = (page - 1) * perPage;
+
+    const token = await getAccessToken();
+    const listings = await fetchListingsPage(token, skip, perPage);
+
+    const numericKeys = listings
+      .map((l) => l.ListingKeyNumeric)
+      .filter(Boolean);
+    const mediaMap = await fetchMediaForKeys(token, numericKeys);
 
     const result = listings.map((l) => ({
       id: l.ListingId,
@@ -98,7 +92,7 @@ app.get("/api/listings", async (req, res) => {
       images: mediaMap[l.ListingKeyNumeric] || [],
     }));
 
-    res.json(result);
+    res.json({ page, perPage, listings: result });
   } catch (error) {
     console.error(
       "Error fetching listings:",
