@@ -102,6 +102,63 @@ app.get("/api/listings", async (req, res) => {
   }
 });
 
+app.get("/api/listings/:id", async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const id = req.params.id;
+
+    // Filter listings server-side by ListingId
+    const response = await axios.get(
+      `${process.env.LISTINGS_URL}?$filter=ListingId eq '${id}'`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+          "Originating-System": process.env.ORIGINATING_SYSTEM,
+        },
+      }
+    );
+
+    const listing = response.data.value[0];
+    if (!listing) return res.status(404).json({ error: "Not found" });
+
+    const mediaResponse = await axios.get(
+      `https://api-trestle.corelogic.com/trestle/odata/Media?$filter=ResourceRecordKeyNumeric eq ${listing.ListingKeyNumeric}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept:
+            "application/json;odata.metadata=minimal;IEEE754Compatible=true",
+          "Originating-System": process.env.ORIGINATING_SYSTEM,
+        },
+      }
+    );
+
+    const media = mediaResponse.data.value.map((m) => m.MediaURL);
+
+    const result = {
+      id: listing.ListingId,
+      key: listing.ListingKeyNumeric,
+      status: listing.StandardStatus,
+      price: listing.ListPrice,
+      type: listing.PropertyType,
+      address: listing.UnparsedAddress,
+      bedrooms: listing.BedroomsTotal,
+      bathrooms: listing.BathroomsFull,
+      area: listing.LivingArea,
+      images: media,
+    };
+
+    res.json(result);
+  } catch (error) {
+    console.error(
+      "Error fetching listing by ID:",
+      error?.response?.data || error.message
+    );
+    res.status(500).json({ error: "Failed to fetch listing" });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
 });
