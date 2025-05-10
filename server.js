@@ -8,6 +8,12 @@ app.use(cors());
 
 const PORT = process.env.PORT || 5000;
 
+app.get("/scheduled-task", (req, res) => {
+  console.log("Scheduled task triggered!");
+  // Run your task here, e.g., database cleanup, sending emails, etc.
+  res.send("Task completed");
+});
+
 async function getAccessToken() {
   const params = new URLSearchParams();
   params.append("grant_type", "client_credentials");
